@@ -1,0 +1,17 @@
+# R-specific
+.Rhistory
+.Rdata
+.RData
+.Ruserdata
+.Rproj.user/
+*.Rproj
+
+# Data (usually)
+data/
+*.csv
+*.xlsx
+
+# Output (unless you want to version it)
+output/
+*.html
+*.pdf
