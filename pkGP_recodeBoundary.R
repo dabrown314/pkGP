@@ -5,6 +5,8 @@
 # This file is to replicate the pkGP-section51 boundary example, but with a
 # cleaner parameterization of the boundary to simplify inner product computation
 #
+#
+# minor changes to check git tracking.
 ################################################################################
 
 rm(list = ls())
