@@ -171,23 +171,3 @@ Cov <- V %*% diag(quad$weights) %*% K.bas %*% diag(quad$weights) %*% t(V)
 
 E.cov <- eigen(Cov + 1e-6 * diag(L), symmetric = TRUE)
 Cov.inv <- E.cov$vectors %*% diag(1 / abs(E.cov$values)) %*% t(E.cov$vectors)
-
-
-################################################################################
-
-# Projected kernel: K_0(x,y) = K(x,y) - <k_x, k_y>_{H(T_0)}
-# where the inner product is approximated via the boundary quadrature
-K.post <- function(X, Y) {
-  K.x <- K2(X, xg) %*% diag(quad$weights) %*% t(V) # n.x x L
-  K.y <- K2(Y, xg) %*% diag(quad$weights) %*% t(V) # n.y x L
-  return(K2(X, Y) - K.x %*% Cov.inv %*% t(K.y))
-} # End fn K.post
-
-
-# Posterior mean: eq (13), assuming zero prior mean
-mean.post <- function(X, g) {
-  K.e <- K2(X, xg) %*% diag(quad$weights) %*% t(V) # n.x x L
-  g.vals <- matrix(apply(xg, 1, g), nrow = 1) # 1 x n.nodes
-  K.g <- g.vals %*% diag(quad$weights) %*% t(V) # 1 x L
-  return(K.e %*% Cov.inv %*% t(K.g))
-} # End fn mean.post
