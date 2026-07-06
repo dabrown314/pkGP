@@ -160,10 +160,16 @@ for (i in 1:L) {
 K.bas <- K2(xg, xg)
 
 # Discretized boundary integral operator: phi^T W K.bas W phi  (L x L)
-# Eigenvectors of this are proper eigenfunctions of the full boundary kernel operator
-K.int <- t(phi) %*% diag(quad$weights) %*% K.bas %*% diag(quad$weights) %*% phi
+# Eigenvectors of this are proper eigenfunctions of the full boundary kernel
+# operator
+K.int <- t(phi) %*% diag(quad$weights) %*% K.bas %*% diag(quad$weights) %*% phi # K.int = A matrix in Oya
+# = {<K\varphi_i, \varphi_j>}
 
+# Solves the (ordinary) e-val problem in eq (5) of
+# Oya et al., where K.int = A and C = identity since basis fns are
+# orthonormal. E$vectors contains the e-vectors as COLUMN vectors.
 E <- eigen(K.int) # E$vectors: columns are eigenvectors in R^L
+
 
 # V[j, ] = j-th discretized eigenfunction evaluated at all n.nodes boundary points
 V <- t(E$vectors) %*% t(phi) # L x n.nodes
@@ -171,5 +177,44 @@ V <- t(E$vectors) %*% t(phi) # L x n.nodes
 # Boundary covariance matrix: now a single L x L block (vs. 4L x 4L in original)
 Cov <- V %*% diag(quad$weights) %*% K.bas %*% diag(quad$weights) %*% t(V)
 
-E.cov <- eigen(Cov + 1e-6 * diag(L), symmetric = TRUE)
+# By orthogonal eigenfunctions, we know Cov is diagonal. Code it as such.
+Cov <- diag(diag(Cov))
+
+
+# I don't think we need the nugget if the matrix is diagonal.
+#E.cov <- eigen(Cov + 1e-6 * diag(L), symmetric = TRUE)
+# E.cov <- eigen(Cov, symmetric = TRUE) don't need to do it at all!
+E.cov <- list(values = diag(Cov), vectors = diag(L))
+E.cov$values <- diag(Cov)
+E.cov$vectors <- diag(L)
+
 Cov.inv <- E.cov$vectors %*% diag(1 / abs(E.cov$values)) %*% t(E.cov$vectors)
+
+
+################################################################################
+
+# Use Cov.inv to define the updated GP prior model, K.post and mean.post.
+#
+# Because the whole boundary is integrated at once (single set of nodes xg with
+# weights quad$weights), there is no need to loop over / block by edge as in
+# pkGP-section51.R. Each boundary "feature map" is a single n x L matrix:
+#   K2(X, xg) %*% diag(quad$weights) %*% t(V)
+# and Cov (hence Cov.inv) is a single L x L (diagonal) matrix.
+
+# Approximate updated (projected) kernel with the "nuggetized" RKHS inner
+# product. K.x %*% Cov.inv %*% t(K.y) = <k_x, k_y>_{H(T_0)}, so
+# Cov.inv = K_{T_0}^{-1}, where K_{T_0} is the projection of K onto H_0^\perp.
+K.post <- function(X, Y) {
+  K.x <- K2(X, xg) %*% diag(quad$weights) %*% t(V)
+  K.y <- K2(Y, xg) %*% diag(quad$weights) %*% t(V)
+  K2(X, Y) - K.x %*% Cov.inv %*% t(K.y)
+} # End fn K.post
+
+
+# Corresponds to eq (13) in the RKHS text, assuming prior mean = 0.
+mean.post <- function(X, g) {
+  g.x <- matrix(apply(xg, 1, g), nrow = 1) # g evaluated at boundary nodes
+  K.e <- K2(X, xg) %*% diag(quad$weights) %*% t(V)
+  K.g <- g.x %*% diag(quad$weights) %*% t(V)
+  K.e %*% Cov.inv %*% t(K.g)
+} # End fn mean.post
