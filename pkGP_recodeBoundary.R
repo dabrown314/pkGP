@@ -98,7 +98,7 @@ limetal02non <- function(xx) {
 #   return(out)
 # } # End fn K2
 K2 <- function(X, Y) {
-  params[1] * Matern(rdist(X, Y), range = sqrt(params[2]), nu = 3 / 2)
+  params[1] * Matern(rdist(X, Y), range = sqrt(params[2]) / sqrt(3), nu = 3 / 2)
 }
 
 
@@ -138,30 +138,57 @@ l.inv <- function(x) {
 
 ################################################################################
 
-J <- 15 # Max order of polynomial approximation for RR method
-
-# In the original file, we used m = 15 quadrature nodes along each of 4 edges.
-# This is equivalent to using 4*15 = 60 nodes around the entire square.
-
 params <- c(1, 1, 1) # (scale, length-scale x, length-scale y)
 
-m <- 15 # Polynomial order (basis has m+1 functions)
+m <- 15 # Polynomial order PER EDGE (basis has m+1 functions per edge,
+# L = 4*(m+1) total)
 
-# Gauss-Legendre nodes and weights on [-1, 1] covering the entire boundary.
-# Using 4*m nodes total; increase for finer resolution along the boundary.
-quad <- gauss.quad(4 * m, kind = "legendre")
-n.nodes <- length(quad$nodes)
+n.per <- 60 # Quadrature nodes per edge (matches pkGP-section51.R, which used
+# a 60-node rule on each edge)
+
+# --- Per-edge composite Gauss-Legendre quadrature -----------------------------
+#
+# The boundary functions s |-> K(x, l(s)) are smooth along each edge but have
+# kinks at the corners (s = -0.5, 0, 0.5). A single Gauss rule spanning the
+# corners converges poorly, so instead we use four Gauss panels, one per edge,
+# with panel boundaries at the corners. Each edge occupies an s-subinterval of
+# half-width 0.25 centered at:
+centers <- c(-0.75, -0.25, 0.25, 0.75)
+
+gq <- gauss.quad(n.per, kind = "legendre") # Reference rule on [-1, 1]
+
+# Composite rule over s in [-1, 1]: affinely map the reference rule into each
+# edge's subinterval (Jacobian = 0.25)
+quad <- list(
+  nodes = as.vector(outer(0.25 * gq$nodes, centers, "+")),
+  weights = rep(0.25 * gq$weights, 4)
+)
+n.nodes <- length(quad$nodes) # = 4 * n.per
 
 # Map quadrature nodes to 2D boundary points: single n.nodes x 2 matrix
 xg <- t(sapply(quad$nodes, l))
 
-# Legendre polynomial basis, evaluated at the boundary quadrature nodes
+# --- Piecewise (per-edge) Legendre basis --------------------------------------
+#
+# 16 normalized Legendre polynomials on each edge, zero off the edge, giving
+# L = 64 basis functions total. Piecewise polynomials capture the corner kinks
+# that global polynomials on [-1, 1] cannot, and keep the polynomial degree low
+# (high-degree Legendre evaluation via orthopolynom is numerically unstable).
 basis <- lapply(legendre.polynomials(m, normalized = TRUE), as.function)
-L <- length(basis) # = m + 1
+L <- 4 * length(basis) # = 4 * (m + 1)
 
+# On an edge subinterval of half-width 0.25, the normalized basis function is
+# 2 * P_k(u), where u = 4*(s - center) maps the subinterval to [-1, 1] and the
+# factor 2 = 1/sqrt(0.25) restores unit L2(ds) norm. Since the quadrature
+# nodes are the mapped reference nodes, u = gq$nodes exactly, so each edge's
+# block of phi is the same (n.per x (m+1)) matrix.
+phi.edge <- 2 * sapply(basis, function(b) sapply(gq$nodes, b))
 phi <- matrix(0, nrow = n.nodes, ncol = L)
-for (i in 1:L) {
-  phi[, i] <- sapply(quad$nodes, basis[[i]])
+for (j in 1:4) {
+  phi[
+    ((j - 1) * n.per + 1):(j * n.per),
+    ((j - 1) * (m + 1) + 1):(j * (m + 1))
+  ] <- phi.edge
 }
 
 # Unified kernel matrix over all boundary quadrature points (n.nodes x n.nodes)
@@ -176,7 +203,9 @@ K.int <- t(phi) %*% diag(quad$weights) %*% K.bas %*% diag(quad$weights) %*% phi 
 # Solves the (ordinary) e-val problem in eq (5) of
 # Oya et al., where K.int = A and C = identity since basis fns are
 # orthonormal. E$vectors contains the e-vectors as COLUMN vectors.
-E <- eigen(K.int) # E$vectors: columns are eigenvectors in R^L
+# symmetric = TRUE is important: the default general solver can return
+# spurious complex eigenvectors from tiny numerical asymmetries.
+E <- eigen(K.int, symmetric = TRUE) # E$vectors: columns are eigenvectors in R^L
 
 
 # V[j, ] = j-th discretized eigenfunction evaluated at all n.nodes boundary points
@@ -193,8 +222,8 @@ Cov <- diag(diag(Cov))
 #E.cov <- eigen(Cov + 1e-6 * diag(L), symmetric = TRUE)
 # E.cov <- eigen(Cov, symmetric = TRUE) don't need to do it at all!
 E.cov <- list(values = diag(Cov), vectors = diag(L))
-E.cov$values <- diag(Cov)
-E.cov$vectors <- diag(L)
+#E.cov$values <- diag(Cov)
+#E.cov$vectors <- diag(L)
 
 Cov.inv <- E.cov$vectors %*% diag(1 / abs(E.cov$values)) %*% t(E.cov$vectors)
 
@@ -428,6 +457,79 @@ legend(
     #13,
     14,
     25
+  ),
+  cex = 4,
+  bty = "n"
+)
+dev.off()
+
+
+# Analagous to Figure 4
+#pdf("boundaryExPredsVsTrue.pdf", width = 45, height = 15)
+x11(width = 45, height = 15)
+par(mfrow = c(1, 3), mar = c(5, 5, 4, 2) + 0.1)
+plot(
+  post.mean,
+  f.test,
+  xlab = "Prediction",
+  ylab = "True f",
+  pch = 20,
+  cex = 3,
+  main = "pkGP",
+  cex.lab = 3,
+  cex.axis = 2.6,
+  cex.main = 4
+)
+abline(a = 0, b = 1, lwd = 2)
+legend(
+  "topleft",
+  legend = sprintf(
+    "RMSE = %.4f",
+    sqrt(sum((f.test - post.mean)^2) / nrow(test))
+  ),
+  cex = 4,
+  bty = "n"
+)
+plot(
+  post.mean.reg,
+  f.test,
+  pch = 20,
+  xlab = "Prediction",
+  ylab = "",
+  cex = 3,
+  main = "Kriging",
+  cex.lab = 3,
+  cex.axis = 2.6,
+  cex.main = 4
+)
+abline(a = 0, b = 1, lwd = 2)
+legend(
+  "topleft",
+  legend = sprintf(
+    "RMSE = %.4f",
+    sqrt(sum((f.test - post.mean.reg)^2) / nrow(test))
+  ),
+  cex = 4,
+  bty = "n"
+)
+plot(
+  post.mean.reg.nug,
+  f.test,
+  pch = 20,
+  xlab = "Prediction",
+  cex = 3,
+  ylab = "",
+  main = "Pseudo-Kriging",
+  cex.lab = 3,
+  cex.axis = 2.6,
+  cex.main = 4
+)
+abline(a = 0, b = 1, lwd = 2)
+legend(
+  "topleft",
+  legend = sprintf(
+    "RMSE = %.4f",
+    sqrt(sum((f.test - post.mean.reg.nug)^2) / nrow(test))
   ),
   cex = 4,
   bty = "n"
