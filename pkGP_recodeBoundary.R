@@ -59,10 +59,18 @@ limetal02non <- function(xx) {
   #
   # xx = c(x1, x2)
   #
+  # The function as defined assumes x \in [0, 1]^2, but the input is
+  # x \in [-1, 1]^2, so needs to be rescaled.
+  #
   ##########################################################################
 
-  x1 <- xx[1]
-  x2 <- xx[2]
+  # Map [-1, 1] -> [0, 1]
+  xs <- xx
+  xs[1] <- (xx[1] + 1) / 2
+  xs[2] <- (xx[2] + 1) / 2
+
+  x1 <- xs[1]
+  x2 <- xs[2]
 
   fact1 <- 30 + 5 * x1 * sin(5 * x1)
   fact2 <- 4 + exp(-5 * x2)
@@ -218,3 +226,210 @@ mean.post <- function(X, g) {
   K.g <- g.x %*% diag(quad$weights) %*% t(V)
   K.e %*% Cov.inv %*% t(K.g)
 } # End fn mean.post
+
+
+################################################################################
+################# Putting it to work ###########################################
+################################################################################
+
+N <- 20 # Number of interior observations = 10*d
+D <- 2 * randomLHS(n = N, k = 2) - 1 # LHS in 2D, converting [0, 1] -> [-1, 1]
+
+# We do not use [0, 8] anymore because of how the boundary is coded now. Just
+# use [-1, 1]
+# reg.bayes <- seq(0, 8, length.out = 4 * length(basis)) # Sequence of points
+# to map to the edges of [-1, 1]
+
+reg.bayes <- seq(-1, 1, length.out = 4 * length(basis)) # Sequence of points
+n.reg <- length(reg.bayes)
+reg.vals <- t(sapply(reg.bayes, l)) # Convert to 2D boundary points
+
+D.reg <- rbind(D, reg.vals) # Combine boundary points with interior points.
+# These are the training points for the usual kriging predictor - analagous
+# the 4*L nodes around the boundary that were used to compute the spectral
+# projection
+
+# Here also using sequence along [-1, 1] instead of [0, 8]
+#t <- seq(0, 8, 0.1)
+t <- seq(-1, 1, 0.1)
+test.b <- t(sapply(t, l)) # Again, comes back around to repeat [-1, 1]
+n.test <- dim(test.b)[1]
+# Pushing away from the boundary
+test <- rbind(0.9 * test.b, 0.5 * test.b)
+
+
+y <- apply(D, 1, limetal02non) #+ rnorm(N, mean=0, sd=0.05)  # Just the interior points
+y.reg <- apply(D.reg, 1, limetal02non) #+ rnorm((N + n.reg), mean=0, sd=0.05)  # Interior
+# and boundary observations
+
+############################ pkGP ###################################
+
+mu.post <- mean.post(test, limetal02non) # Computing eq. (13) for
+# t = test points. This, and eq (15) determine the prior GP: GP(\mu_0, k_0)
+
+# mu.post and K.post determine the (projected) GP "PRIOR" distribution. Which
+# is updated to obtain the posterior predictive distribuiton. Below is the
+# mean of this distribution == the linear predictor using pkGP
+post.mean <- mu.post +
+  K.post(test, D) %*% solve(K.post(D, D)) %*% (y - mean.post(D, limetal02non))
+# We only need the k_0(.,.) at the interior points because the boundary has
+# already been absorbed into K.post (the basis functions and the i.p. on
+# H(T_0)
+
+######################### ordinary kriging ############################
+
+# The typical predictor (no pseduo observations)
+# E.reg=eigen(k(D.reg,D.reg))#+1e-10*diag(N+n.reg));
+E.reg <- eigen(K2(D, D) + 1e-6 * diag(dim(D)[1]))
+# E.reg <- eigen(K2(D.reg, D.reg))
+K.reg.inv <- E.reg$vectors %*% diag(1 / abs(E.reg$values)) %*% t(E.reg$vectors)
+#post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+post.mean.reg <- K2(test, D) %*% K.reg.inv %*% y # The usual predictor
+
+
+# Pseudo-kriging with additional training data
+E.reg.nug <- eigen(K2(D.reg, D.reg) + 1e-6 * diag(dim(D.reg)[1]))
+#E.reg <- eigen(K2(D.reg, D.reg))
+K.reg.inv.nug <- E.reg.nug$vectors %*%
+  diag(1 / abs(E.reg.nug$values)) %*%
+  t(E.reg.nug$vectors)
+#post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+post.mean.reg.nug <- K2(test, D.reg) %*% K.reg.inv.nug %*% y.reg # The usual pred.
+
+
+################################################################################
+
+# Comparing performance
+
+f.test <- apply(test, 1, limetal02non) # True values
+
+
+# # Metrics
+# cor(f.test, post.mean)
+# #cor(f.test, bdry.mean)
+# #cor(f.test, post.mean.reg)
+# cor(f.test, post.mean.reg.nug)
+# # summary(lm(f.test~post.mean))
+# # summary(lm(f.test~bdry.mean))
+# # summary(lm(f.test~post.mean.reg))
+#
+# max(abs(f.test-post.mean))
+# #max(abs(f.test-bdry.mean))
+# #max(abs(f.test-post.mean.reg))
+# max(abs(f.test-post.mean.reg.nug))
+
+sqrt(sum((f.test - post.mean)^2) / dim(test)[1])
+sqrt(sum((f.test - post.mean.reg)^2) / dim(test)[1])
+sqrt(sum((f.test - post.mean.reg.nug)^2) / dim(test)[1])
+
+
+# Analagous to Figure 3 in the pkGP paper
+x.vals <- seq(-1, 1, length = 50)
+y.vals <- seq(-1, 1, length = 50)
+grid <- expand.grid(x.vals, y.vals)
+
+z <- apply(grid, 1, limetal02non)
+
+x.mat <- matrix(
+  rep(x.vals, times = length(y.vals)),
+  ncol = length(x.vals),
+  byrow = TRUE
+)
+y.mat <- matrix(
+  rep(y.vals, times = length(x.vals)),
+  ncol = length(y.vals),
+  byrow = TRUE
+)
+z.mat <- matrix(z, ncol = length(x.vals), nrow = length(y.vals), byrow = TRUE)
+
+
+#pdf("boundaryExPerspPlot.pdf", width = 25, height = 25)
+x11()
+persp3D(
+  x.vals,
+  y.vals,
+  z.mat,
+  colvar = z.mat,
+  col = viridis(100),
+  alpha = 0.7,
+  theta = 40,
+  phi = 30,
+  expand = 0.7,
+  xlab = "x",
+  ylab = "y",
+  zlab = "f(x, y)",
+  main = "",
+  contour = TRUE,
+  colkey = FALSE,
+  lighting = TRUE,
+  ticktype = "detailed",
+  axes = TRUE,
+  cex.lab = 3, # Increases size of x, y, z labels
+  cex.axis = 2.6, # Increases size of axis tick labels
+  cex.main = 4
+)
+
+
+points3D(
+  test[, 2],
+  test[, 1],
+  post.mean.reg,
+  add = TRUE,
+  pch = 14,
+  cex = 1.5,
+  col = "blue"
+)
+
+
+points3D(
+  test[, 2],
+  test[, 1],
+  post.mean.reg.nug,
+  add = TRUE,
+  pch = 25,
+  cex = 1.5,
+  col = "blue"
+)
+
+
+points3D(
+  test[, 2],
+  test[, 1],
+  post.mean,
+  add = TRUE,
+  pch = 8,
+  cex = 1.5,
+  col = "red"
+)
+
+
+points3D(
+  D.reg[, 2],
+  D.reg[, 1],
+  y.reg,
+  add = TRUE,
+  pch = 20,
+  cex = 1.5,
+  col = "black"
+)
+
+
+legend(
+  "topleft",
+  legend = c("pkGP", "Kriging", "Pseudo-Kriging"),
+  col = c(
+    "red",
+    #"green",
+    "blue",
+    "blue"
+  ),
+  pch = c(
+    8,
+    #13,
+    14,
+    25
+  ),
+  cex = 4,
+  bty = "n"
+)
+dev.off()
