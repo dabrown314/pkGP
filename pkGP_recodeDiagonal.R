@@ -362,3 +362,106 @@ legend(
   bty = "n"
 )
 dev.off()
+
+
+################################################################################
+################################################################################
+
+# Do ordinary kriging with an increasing number of pseudo-observations and plot
+# results vs. pkGP
+
+# No. of pseudo-observations is in reg.vals
+
+r.errs <- rep(0, 10)
+r.errs.full <- rep(0, 10)
+n.ps <- seq(6, 55, length = 10) # Number of pseudo-observations
+
+
+x.vals <- seq(-1, 1, length = 30)
+y.vals <- seq(-1, 1, length = 30)
+test.grid <- as.matrix(expand.grid(x.vals, y.vals))
+f.test.grid <- apply(test.grid, 1, f) # True values
+
+for (i in 1:10) {
+  reg.bayes.it <- seq(-1, 1, length.out = n.ps[i]) # Sequence of points
+  reg.vals.it <- cbind(reg.bayes.it, reg.bayes.it) # Convert to 2D boundary points
+  D.reg.it <- rbind(D, reg.vals.it)
+
+  y.reg.it <- apply(D.reg.it, 1, f)
+
+  # E.reg <- eigen(K2(D.reg, D.reg))
+  # K.reg.inv <- E.reg$vectors%*%diag(1/abs(E.reg$values))%*%t(E.reg$vectors)
+  # #post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+  # post.mean.reg <- K2(test,D.reg)%*%K.reg.inv%*%y.reg  # The usual predictor
+
+  # Try with and without nugget
+  E.reg.nug <- eigen(K2(D.reg.it, D.reg.it) + 1e-6 * diag(dim(D.reg.it)[1]))
+  #E.reg <- eigen(K2(D.reg, D.reg))
+  K.reg.inv.nug <- E.reg.nug$vectors %*%
+    diag(1 / abs(E.reg.nug$values)) %*%
+    t(E.reg.nug$vectors)
+  #post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+  post.mean.reg.nug <- K2(test, D.reg.it) %*% K.reg.inv.nug %*% y.reg.it
+
+  post.mean.reg.full <- K2(test.grid, D.reg.it) %*% K.reg.inv.nug %*% y.reg.it
+
+  #r.errs[i] <- max(abs(f.test-post.mean.reg.nug))/max(f.test)
+  r.errs[i] <- sqrt(sum(((f.test - post.mean.reg.nug)^2))) / sqrt(sum(f.test^2))
+  #r.errs.full[i] <- max(abs(f.test.grid-post.mean.reg.full))/max(f.test.grid)
+  r.errs.full[i] <- sqrt(sum(((f.test.grid - post.mean.reg.full)^2))) /
+    sqrt(sum(f.test.grid^2))
+}
+
+
+mu.post.grid <- mean.post(test.grid, f) # Computing eq. (13) for t = test points. This,
+# and eq (15) determine the prior GP: GP(\mu_0, k_0)
+
+# mu.post and K.post determine the (projected) GP "PRIOR" distribution. Which
+# is updated to obtain the posterior predictive distribuiton. Below is the
+# mean of this distribution == the linear predictor using pGP
+# post.mean <- mu.post +
+#     K.post(test, D)%*%solve(K.post(D, D) + 0.05*diag(dim(D)[1]))%*%
+#     (y-mean.post(D,f))
+
+post.mean.grid <- mu.post.grid +
+  K.post(test.grid, D) %*% solve(K.post(D, D)) %*% (y - mean.post(D, f)) # We only need the k_0(.,.) at the interior points
+# because the boundary has already been absorbed
+# into K.post (the basis functions and the i.p.
+# on H(T_0)
+
+# Figure 9
+#pdf("diagonalExPseudos.pdf", width = 25, height = 25)
+x11(width = 25, height = 25)
+#par(mfrow= c(1, 2), mar = c(5, 5, 4, 2) + 0.1)
+par(mar = c(5, 5, 4, 2) + 0.1)
+
+
+plot(
+  n.ps,
+  r.errs.full,
+  type = "b",
+  pch = 20,
+  cex = 3,
+  ylim = c(0, 0.8),
+  lwd = 3,
+  xlab = "Number of Pseudo-observations",
+  ylab = "Relative L2 Error",
+  main = "",
+  cex.lab = 3, # Increases size of x, y, z labels
+  cex.axis = 2.6, # Increases size of axis tick labels
+  cex.main = 4
+)
+abline(
+  h = sqrt(sum(((f.test.grid - post.mean.grid)^2))) / sqrt(sum(f.test.grid^2)),
+  lty = 2,
+  lwd = 3
+)
+legend(
+  "topright",
+  legend = c("pkGP", "Pseudo-Kriging"),
+  lty = c(2, 1),
+  lwd = 3,
+  bty = "n",
+  cex = 4
+)
+dev.off()
