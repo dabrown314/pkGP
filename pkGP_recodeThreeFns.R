@@ -1,6 +1,6 @@
 # pkGP-section51-ThreeFns.R
 # Andrew Brown and John Nicholson
-# Sept. 19, 2025.
+# July 7, 2026
 #
 # This file is to replicate pkGP-section51-ThreeFns.R, but using the cleaner
 # boundary representation to facilitate a diagonal cov matrix.
