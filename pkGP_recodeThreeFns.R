@@ -217,3 +217,685 @@ mean.post <- function(X, g) {
   K.g <- g.x %*% diag(quad$weights) %*% t(V)
   K.e %*% Cov.inv %*% t(K.g)
 } # End fn mean.post
+
+
+################# Test with training data ######################################
+################################################################################
+################################################################################
+
+# We are going to loop over training data size, but keeping the number of
+# psuedo-observations the same for ordinary kriging
+
+# corner peak fn
+
+#Ns <- c(20, 40, 60, 80, 100)  # Number of interior observations
+Ns <- seq(10, 200, by = 10) # Number of interior observations
+
+
+pk.err <- rep(0, length(Ns))
+ps.krig <- rep(0, length(Ns))
+ps.k.reg <- rep(0, length(Ns))
+
+for (sz.ind in 1:length(Ns)) {
+  N <- Ns[sz.ind] # Number of interior observations = 10*d
+  D <- 2 * randomLHS(n = N, k = 2) - 1 # LHS in 2D, converting [0, 1] -> [-1, 1]
+
+  reg.bayes <- seq(-1, 1, length.out = 4 * length(basis)) # Sequence of points
+  # to map to the edges of [-1, 1]
+  n.reg <- length(reg.bayes)
+  reg.vals <- t(sapply(reg.bayes, l)) # Convert to 2D boundary points
+  D.reg <- rbind(D, reg.vals) # Combine boundary points with interior points.
+  # These are the training points for the usual kriging predictor - analagous
+  # the 4*L nodes around the boundary that were used to compute the spectral
+  # projection
+
+  # t <- seq(0, 8, 0.1)
+  # test.b <- t(sapply(t,l)) # Again, comes back around to repeat [-1, 1]
+  # n.test <- dim(test.b)[1]
+  # # Pushing away from the boundary
+  # test <- rbind(0.9*test.b, 0.5*test.b)
+
+  # For this example, we want to approximate the function over the entire grid
+  x.vals <- seq(-1, 1, length = 30)
+  y.vals <- seq(-1, 1, length = 30)
+  test.grid <- as.matrix(expand.grid(x.vals, y.vals))
+
+  z <- apply(test.grid, 1, f.corn) # True values
+
+  y <- apply(D, 1, f.corn) #+ rnorm(N, mean=0, sd=0.05)  # Just the interior points
+  y.reg <- apply(D.reg, 1, f.corn) #+ rnorm((N + n.reg), mean=0, sd=0.05)  # Interior and
+  # boundary observations
+
+  ########## pkGP ##############
+
+  mu.post <- mean.post(test.grid, f.corn) # Computing eq. (13) for t = test points.
+  # This, and eq (15) determine the prior GP: GP(\mu_0, k_0)
+
+  # mu.post and K.post determine the (projected) GP "PRIOR" distribution. Which
+  # is updated to obtain the posterior predictive distribuiton. Below is the
+  # mean of this distribution == the linear predictor using pGP
+  # post.mean <- mu.post +
+  #     K.post(test, D)%*%solve(K.post(D, D) + 0.05*diag(dim(D)[1]))%*%
+  #     (y-mean.post(D,f))
+  post.mean <- mu.post +
+    K.post(test.grid, D) %*% solve(K.post(D, D)) %*% (y - mean.post(D, f.corn)) # We only need the k_0(.,.) at the interior points
+  # because the boundary has already been absorbed
+  # into K.post (the basis functions and the i.p.
+  # on H(T_0)
+
+  ########### ordinary kriging ############
+
+  # The typical predictor (no pseduo observations)
+  # E.reg=eigen(k(D.reg,D.reg))#+1e-10*diag(N+n.reg));
+  E.reg <- eigen(K2(D, D) + 1e-6 * diag(dim(D)[1]))
+  # E.reg <- eigen(K2(D.reg, D.reg))
+  K.reg.inv <- E.reg$vectors %*%
+    diag(1 / abs(E.reg$values)) %*%
+    t(E.reg$vectors)
+  #post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+  post.mean.reg <- K2(test.grid, D) %*% K.reg.inv %*% y # The usual predictor
+
+  # Pseudo with additional training data
+  E.reg.nug <- eigen(K2(D.reg, D.reg) + 1e-6 * diag(dim(D.reg)[1]))
+  #E.reg <- eigen(K2(D.reg, D.reg))
+  K.reg.inv.nug <- E.reg.nug$vectors %*%
+    diag(1 / abs(E.reg.nug$values)) %*%
+    t(E.reg.nug$vectors)
+  #post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+  post.mean.reg.nug <- K2(test.grid, D.reg) %*% K.reg.inv.nug %*% y.reg # The usual pred.
+
+  f.test <- apply(test.grid, 1, f.corn) # True values
+
+  # Metrics
+  # cor(f.test, post.mean)
+  # #cor(f.test, post.mean.reg)
+  # cor(f.test, post.mean.reg.nug)
+  # # summary(lm(f.test~post.mean))
+  # # summary(lm(f.test~bdry.mean))
+  # # summary(lm(f.test~post.mean.reg))
+  #
+  # max(abs(f.test-post.mean))
+  # #max(abs(f.test-post.mean.reg))
+  # max(abs(f.test-post.mean.reg.nug))
+  #
+  #
+  # sqrt(sum((f.test-post.mean)^2)/dim(test)[1])
+  # #sqrt(sum((f.test-post.mean.reg)^2)/dim(test)[1])
+  # sqrt(sum((f.test-post.mean.reg.nug)^2)/dim(test)[1])
+
+  # Compute the relative sup errors
+  pk.err[sz.ind] <- max(abs(f.test - post.mean)) / max(abs(f.test))
+  ps.krig[sz.ind] <- max(abs(f.test - post.mean.reg.nug)) / max(abs(f.test))
+  ps.k.reg[sz.ind] <- max(abs(f.test - post.mean.reg)) / max(abs(f.test))
+
+  # Compute relative L1 errors
+  # pk.err[sz.ind] <- norm(f.test - post.mean, type= "o")/
+  #   norm(as.matrix(f.test), type= "o")
+  # ps.krig[sz.ind] <- norm(f.test - post.mean.reg.nug, type= "o")/
+  #   norm(as.matrix(f.test), type= "o")
+} # End loop over training data size
+
+
+################################################################################
+################################################################################
+################################################################################
+
+# Repeat the experiment above with the product peak function
+
+# product peak fn
+
+#Ns <- c(20, 40, 60, 80, 100)  # Number of interior observations
+Ns <- seq(10, 200, by = 10) # Number of interior observations
+
+
+pk.err.prod <- rep(0, length(Ns))
+ps.krig.prod <- rep(0, length(Ns))
+ps.k.reg.prod <- rep(0, length(Ns))
+
+for (sz.ind in 1:length(Ns)) {
+  N <- Ns[sz.ind] # Number of interior observations = 10*d
+  D <- 2 * randomLHS(n = N, k = 2) - 1 # LHS in 2D, converting [0, 1] -> [-1, 1]
+
+  reg.bayes <- seq(-1, 1, length.out = 4 * length(basis)) # Sequence of points
+  # to map to the edges of [-1, 1]
+  n.reg <- length(reg.bayes)
+  reg.vals <- t(sapply(reg.bayes, l)) # Convert to 2D boundary points
+  D.reg <- rbind(D, reg.vals) # Combine boundary points with interior points.
+  # These are the training points for the usual kriging predictor - analagous
+  # the 4*L nodes around the boundary that were used to compute the spectral
+  # projection
+
+  # t <- seq(0, 8, 0.1)
+  # test.b <- t(sapply(t,l)) # Again, comes back around to repeat [-1, 1]
+  # n.test <- dim(test.b)[1]
+  # # Pushing away from the boundary
+  # test <- rbind(0.9*test.b, 0.5*test.b)
+
+  # For this example, we want to approximate the function over the entire grid
+  x.vals <- seq(-1, 1, length = 30)
+  y.vals <- seq(-1, 1, length = 30)
+  test.grid <- as.matrix(expand.grid(x.vals, y.vals))
+
+  #z <- apply(test.grid, 1, f.corn)  # True values
+
+  y <- apply(D, 1, f.prod) #+ rnorm(N, mean=0, sd=0.05)  # Just the interior points
+  y.reg <- apply(D.reg, 1, f.prod) #+ rnorm((N + n.reg), mean=0, sd=0.05)  # Interior and
+  # boundary observations
+
+  ########## pkGP ##############
+
+  mu.post <- mean.post(test.grid, f.prod) # Computing eq. (13) for t = test points.
+  # This, and eq (15) determine the prior GP: GP(\mu_0, k_0)
+
+  # mu.post and K.post determine the (projected) GP "PRIOR" distribution. Which
+  # is updated to obtain the posterior predictive distribuiton. Below is the
+  # mean of this distribution == the linear predictor using pGP
+  # post.mean <- mu.post +
+  #     K.post(test, D)%*%solve(K.post(D, D) + 0.05*diag(dim(D)[1]))%*%
+  #     (y-mean.post(D,f))
+  post.mean <- mu.post +
+    K.post(test.grid, D) %*% solve(K.post(D, D)) %*% (y - mean.post(D, f.prod)) # We only need the k_0(.,.) at the interior points
+  # because the boundary has already been absorbed
+  # into K.post (the basis functions and the i.p.
+  # on H(T_0)
+
+  ########### ordinary kriging ############
+
+  # The typical predictor (no pseduo observations)
+  # E.reg=eigen(k(D.reg,D.reg))#+1e-10*diag(N+n.reg));
+  E.reg <- eigen(K2(D, D) + 1e-6 * diag(dim(D)[1]))
+  # E.reg <- eigen(K2(D.reg, D.reg))
+  K.reg.inv <- E.reg$vectors %*%
+    diag(1 / abs(E.reg$values)) %*%
+    t(E.reg$vectors)
+  #post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+  post.mean.reg <- K2(test.grid, D) %*% K.reg.inv %*% y # The usual predictor
+
+  # Pseudo with additional training data
+  E.reg.nug <- eigen(K2(D.reg, D.reg) + 1e-6 * diag(dim(D.reg)[1]))
+  #E.reg <- eigen(K2(D.reg, D.reg))
+  K.reg.inv.nug <- E.reg.nug$vectors %*%
+    diag(1 / abs(E.reg.nug$values)) %*%
+    t(E.reg.nug$vectors)
+  #post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+  post.mean.reg.nug <- K2(test.grid, D.reg) %*% K.reg.inv.nug %*% y.reg # The usual pred.
+
+  f.test <- apply(test.grid, 1, f.prod) # True values
+
+  # Metrics
+  # cor(f.test, post.mean)
+  # #cor(f.test, post.mean.reg)
+  # cor(f.test, post.mean.reg.nug)
+  # # summary(lm(f.test~post.mean))
+  # # summary(lm(f.test~post.mean.reg))
+  #
+  # max(abs(f.test-post.mean))
+  # #max(abs(f.test-post.mean.reg))
+  # max(abs(f.test-post.mean.reg.nug))
+  #
+  #
+  # sqrt(sum((f.test-post.mean)^2)/dim(test)[1])
+  # #sqrt(sum((f.test-post.mean.reg)^2)/dim(test)[1])
+  # sqrt(sum((f.test-post.mean.reg.nug)^2)/dim(test)[1])
+
+  # Compute the relative sup errors
+  pk.err.prod[sz.ind] <- max(abs(f.test - post.mean)) / max(abs(f.test))
+  ps.krig.prod[sz.ind] <- max(abs(f.test - post.mean.reg.nug)) /
+    max(abs(f.test))
+  ps.k.reg.prod[sz.ind] <- max(abs(f.test - post.mean.reg)) / max(abs(f.test))
+} # End loop over training data size
+
+
+################################################################################
+################################################################################
+################################################################################
+
+# Repeat the experiment above with the Rosenbrock function
+
+#Ns <- c(20, 40, 60, 80, 100)  # Number of interior observations
+Ns <- seq(10, 200, by = 10) # Number of interior observations
+
+
+pk.err.rosen <- rep(0, length(Ns))
+ps.krig.rosen <- rep(0, length(Ns))
+ps.k.reg.rosen <- rep(0, length(Ns))
+
+for (sz.ind in 1:length(Ns)) {
+  N <- Ns[sz.ind] # Number of interior observations = 10*d
+  D <- 2 * randomLHS(n = N, k = 2) - 1 # LHS in 2D, converting [0, 1] -> [-1, 1]
+
+  reg.bayes <- seq(-1, 1, length.out = 4 * length(basis)) # Sequence of points
+  # to map to the edges of [-1, 1]
+  n.reg <- length(reg.bayes)
+  reg.vals <- t(sapply(reg.bayes, l)) # Convert to 2D boundary points
+  D.reg <- rbind(D, reg.vals) # Combine boundary points with interior points.
+  # These are the training points for the usual kriging predictor - analagous
+  # the 4*L nodes around the boundary that were used to compute the spectral
+  # projection
+
+  # t <- seq(0, 8, 0.1)
+  # test.b <- t(sapply(t,l)) # Again, comes back around to repeat [-1, 1]
+  # n.test <- dim(test.b)[1]
+  # # Pushing away from the boundary
+  # test <- rbind(0.9*test.b, 0.5*test.b)
+
+  # For this example, we want to approximate the function over the entire grid
+  x.vals <- seq(-1, 1, length = 30)
+  y.vals <- seq(-1, 1, length = 30)
+  test.grid <- as.matrix(expand.grid(x.vals, y.vals))
+
+  #z <- apply(test.grid, 1, f.corn)  # True values
+
+  y <- apply(D, 1, f.rosen) #+ rnorm(N, mean=0, sd=0.05)  # Just the interior points
+  y.reg <- apply(D.reg, 1, f.rosen) #+ rnorm((N + n.reg), mean=0, sd=0.05)  # Interior and
+  # boundary observations
+
+  ########## pkGP ##############
+
+  mu.post <- mean.post(test.grid, f.rosen) # Computing eq. (13) for t = test points.
+  # This, and eq (15) determine the prior GP: GP(\mu_0, k_0)
+
+  # mu.post and K.post determine the (projected) GP "PRIOR" distribution. Which
+  # is updated to obtain the posterior predictive distribuiton. Below is the
+  # mean of this distribution == the linear predictor using pGP
+  # post.mean <- mu.post +
+  #     K.post(test, D)%*%solve(K.post(D, D) + 0.05*diag(dim(D)[1]))%*%
+  #     (y-mean.post(D,f))
+  post.mean <- mu.post +
+    K.post(test.grid, D) %*% solve(K.post(D, D)) %*% (y - mean.post(D, f.rosen)) # We only need the k_0(.,.) at the interior points
+  # because the boundary has already been absorbed
+  # into K.post (the basis functions and the i.p.
+  # on H(T_0)
+
+  ########### ordinary kriging ############
+
+  # The typical predictor (no pseduo observations)
+  # E.reg=eigen(k(D.reg,D.reg))#+1e-10*diag(N+n.reg));
+  E.reg <- eigen(K2(D, D) + 1e-6 * diag(dim(D)[1]))
+  # E.reg <- eigen(K2(D.reg, D.reg))
+  K.reg.inv <- E.reg$vectors %*%
+    diag(1 / abs(E.reg$values)) %*%
+    t(E.reg$vectors)
+  #post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+  post.mean.reg <- K2(test.grid, D) %*% K.reg.inv %*% y # The usual predictor
+
+  # Pseudo with additional training data
+  E.reg.nug <- eigen(K2(D.reg, D.reg) + 1e-6 * diag(dim(D.reg)[1]))
+  #E.reg <- eigen(K2(D.reg, D.reg))
+  K.reg.inv.nug <- E.reg.nug$vectors %*%
+    diag(1 / abs(E.reg.nug$values)) %*%
+    t(E.reg.nug$vectors)
+  #post.mean.reg=k(test,D.reg)%*%K.reg.inv%*%y.reg
+  post.mean.reg.nug <- K2(test.grid, D.reg) %*% K.reg.inv.nug %*% y.reg # The usual pred.
+
+  f.test <- apply(test.grid, 1, f.rosen) # True values
+
+  # Metrics
+  # cor(f.test, post.mean)
+  # #cor(f.test, post.mean.reg)
+  # cor(f.test, post.mean.reg.nug)
+  # # summary(lm(f.test~post.mean))
+  # # summary(lm(f.test~bdry.mean))
+  # # summary(lm(f.test~post.mean.reg))
+  #
+  # max(abs(f.test-post.mean))
+  # #max(abs(f.test-post.mean.reg))
+  # max(abs(f.test-post.mean.reg.nug))
+  #
+  #
+  # sqrt(sum((f.test-post.mean)^2)/dim(test)[1])
+  # #sqrt(sum((f.test-post.mean.reg)^2)/dim(test)[1])
+  # sqrt(sum((f.test-post.mean.reg.nug)^2)/dim(test)[1])
+
+  # Compute the relative sup errors
+  pk.err.rosen[sz.ind] <- max(abs(f.test - post.mean)) / max(abs(f.test))
+  ps.krig.rosen[sz.ind] <- max(abs(f.test - post.mean.reg.nug)) /
+    max(abs(f.test))
+  ps.k.reg.rosen[sz.ind] <- max(abs(f.test - post.mean.reg)) / max(abs(f.test))
+
+  # Compute relative L1 errors
+  # pk.err.rosen[sz.ind] <- norm(f.test - post.mean, type= "o")/
+  #   norm(as.matrix(f.test), type= "o")
+  # ps.krig.rosen[sz.ind] <- norm(f.test - post.mean.reg.nug, type= "o")/
+  #   norm(as.matrix(f.test), type= "o")
+} # End loop over training data size
+
+
+################################################################################
+################################################################################
+################################################################################
+
+#### Plot the three functions, then plot relative errors vs. training data size
+x.vals <- seq(-1, 1, length = 50)
+y.vals <- seq(-1, 1, length = 50)
+grid <- expand.grid(x.vals, y.vals)
+
+z <- apply(grid, 1, f.corn) # True values
+
+x.mat <- matrix(
+  rep(x.vals, times = length(y.vals)),
+  ncol = length(x.vals),
+  byrow = TRUE
+)
+y.mat <- matrix(
+  rep(y.vals, times = length(x.vals)),
+  ncol = length(y.vals),
+  byrow = TRUE
+)
+z.mat <- matrix(z, ncol = length(x.vals), nrow = length(y.vals), byrow = TRUE)
+
+
+# Figure 5
+#pdf("threeFunctionsPlot.pdf", width= 60, height= 15)
+x11(width = 60, height = 15)
+par(mfrow = c(1, 3))
+persp3D(
+  x.vals,
+  y.vals,
+  z.mat,
+  colvar = z.mat,
+  col = viridis(100),
+  alpha = 0.7,
+  theta = 40,
+  phi = 30,
+  expand = 0.7,
+  xlab = "",
+  ylab = "",
+  zlab = "",
+  main = "",
+  contour = TRUE,
+  colkey = FALSE,
+  lighting = TRUE,
+  ticktype = "detailed",
+  axes = TRUE,
+  cex.lab = 3, # Increases size of x, y, z labels
+  cex.axis = 2.6, # Increases size of axis tick labels
+  cex.main = 4
+)
+
+
+# points3D(test[, 2], test[, 1], bdry.mean, add= TRUE, pch= 13, cex= 1.5,
+#          col= "green")
+#
+#
+# # points3D(test[, 2], test[, 1], post.mean.reg, add= TRUE, pch= 14, cex= 1.5,
+# #          col= "blue")
+#
+#
+# points3D(test[, 2], test[, 1], post.mean.reg.nug, add= TRUE, pch= 25, cex= 1.5,
+#          col= "blue")
+#
+#
+# points3D(test[, 2], test[, 1], post.mean, add= TRUE, pch= 8, cex= 1.5,
+#          col= "red")
+#
+#
+# points3D(D.reg[, 2], D.reg[, 1], y.reg, add= TRUE, pch= 20, cex= 1.5,
+#          col= "black")
+#
+#
+# legend("topleft", legend= c("pkGP", "bdryGP", "Kriging"),
+#        col= c("red", "green", "blue"),
+#        pch= c(8, 13, 25), cex= 4, bty= "n")
+
+z <- apply(grid, 1, f.prod) # True values
+
+x.mat <- matrix(
+  rep(x.vals, times = length(y.vals)),
+  ncol = length(x.vals),
+  byrow = TRUE
+)
+y.mat <- matrix(
+  rep(y.vals, times = length(x.vals)),
+  ncol = length(y.vals),
+  byrow = TRUE
+)
+z.mat <- matrix(z, ncol = length(x.vals), nrow = length(y.vals), byrow = TRUE)
+
+
+#x11(width= 45, height= 45)
+#pdf("boundaryExPerspPlot.pdf", width= 25, height= 25)
+persp3D(
+  x.vals,
+  y.vals,
+  z.mat,
+  colvar = z.mat,
+  col = viridis(100),
+  alpha = 0.7,
+  theta = 40,
+  phi = 30,
+  expand = 0.7,
+  xlab = "",
+  ylab = "",
+  zlab = "",
+  main = "",
+  contour = TRUE,
+  colkey = FALSE,
+  lighting = TRUE,
+  ticktype = "detailed",
+  axes = TRUE,
+  cex.lab = 3, # Increases size of x, y, z labels
+  cex.axis = 2.6, # Increases size of axis tick labels
+  cex.main = 4
+)
+
+
+z <- apply(grid, 1, f.rosen) # True values
+
+x.mat <- matrix(
+  rep(x.vals, times = length(y.vals)),
+  ncol = length(x.vals),
+  byrow = TRUE
+)
+y.mat <- matrix(
+  rep(y.vals, times = length(x.vals)),
+  ncol = length(y.vals),
+  byrow = TRUE
+)
+z.mat <- matrix(z, ncol = length(x.vals), nrow = length(y.vals), byrow = TRUE)
+
+
+#x11(width= 45, height= 45)
+#pdf("boundaryExPerspPlot.pdf", width= 25, height= 25)
+persp3D(
+  x.vals,
+  y.vals,
+  z.mat,
+  colvar = z.mat,
+  col = viridis(100),
+  alpha = 0.7,
+  theta = 40,
+  phi = 30,
+  expand = 0.7,
+  xlab = "",
+  ylab = "",
+  zlab = "",
+  main = "",
+  contour = TRUE,
+  colkey = FALSE,
+  lighting = TRUE,
+  ticktype = "detailed",
+  axes = TRUE,
+  cex.lab = 3, # Increases size of x, y, z labels
+  cex.axis = 2.6, # Increases size of axis tick labels
+  cex.main = 4
+)
+dev.off()
+
+
+#################################### Plot the relative errors ##################
+
+# Figure 6
+#pdf("threeSupErrsPlot.pdf", width= 60, height= 15)
+x11(width = 60, height = 15)
+# corner peak
+par(mfrow = c(1, 3), mar = c(5, 5, 4, 2) + 0.1)
+plot(
+  Ns,
+  log(ps.krig),
+  type = "b",
+  pch = 8,
+  cex = 2,
+  col = "cyan",
+  xlab = "Training data size",
+  ylab = "Relative sup error (log scale)",
+  main = "Corner Peak",
+  cex.main = 4,
+  ylim = c(-10, 1.5),
+  cex.lab = 2.5,
+  cex.axis = 2.5,
+  lwd = 3
+)
+
+
+lines(Ns, log(ps.k.reg), type = "b", pch = 14, cex = 2, col = "blue", lwd = 3)
+
+lines(Ns, log(pk.err), type = "b", pch = 25, cex = 2, col = "red", lwd = 3)
+
+
+legend(
+  "topright",
+  legend = c(
+    "pkGP",
+    #"bdryGP",
+    "Kriging",
+    "Pseudo-Kriging"
+  ),
+  col = c(
+    "red",
+    #"green",
+    "blue",
+    "cyan"
+  ),
+  pch = c(
+    8,
+    #13,
+    14,
+    25
+  ),
+  cex = 2.5,
+  bty = "n",
+  lwd = 3
+)
+
+
+# product peak
+plot(
+  Ns,
+  log(ps.krig.prod),
+  type = "b",
+  pch = 8,
+  cex = 2,
+  col = "cyan",
+  xlab = "Training data size",
+  ylab = "",
+  main = "Product Peak",
+  cex.main = 4,
+  ylim = c(-10, 1.5),
+  cex.lab = 2.5,
+  cex.axis = 2.5,
+  lwd = 3
+)
+
+
+lines(
+  Ns,
+  log(ps.k.reg.prod),
+  type = "b",
+  pch = 14,
+  cex = 2,
+  col = "blue",
+  lwd = 3
+)
+
+lines(Ns, log(pk.err.prod), type = "b", pch = 25, cex = 2, col = "red", lwd = 3)
+
+legend(
+  "topright",
+  legend = c(
+    "pkGP",
+    #"bdryGP",
+    "Kriging",
+    "Pseudo-Kriging"
+  ),
+  col = c(
+    "red",
+    #"green",
+    "blue",
+    "cyan"
+  ),
+  pch = c(
+    8,
+    #13,
+    14,
+    25
+  ),
+  cex = 2.5,
+  bty = "n",
+  lwd = 3
+)
+
+
+# Rosenbrock
+plot(
+  Ns,
+  log(pk.err.rosen),
+  type = "b",
+  pch = 8,
+  cex = 2,
+  col = "red",
+  xlab = "Training data size",
+  ylab = "",
+  main = "Rosenbrock",
+  cex.main = 4,
+  ylim = c(-10, 1.5),
+  cex.lab = 2.5,
+  cex.axis = 2.5,
+  lwd = 3
+)
+
+
+lines(
+  Ns,
+  log(ps.k.reg.rosen),
+  type = "b",
+  pch = 14,
+  cex = 2,
+  col = "blue",
+  lwd = 3
+)
+
+lines(
+  Ns,
+  log(ps.krig.rosen),
+  type = "b",
+  pch = 25,
+  cex = 2,
+  col = "cyan",
+  lwd = 3
+)
+
+legend(
+  "topright",
+  legend = c(
+    "pkGP",
+    #"bdryGP",
+    "Kriging",
+    "Pseudo-Kriging"
+  ),
+  col = c(
+    "red",
+    #"green",
+    "blue",
+    "cyan"
+  ),
+  pch = c(
+    8,
+    #13,
+    14,
+    25
+  ),
+  cex = 2.5,
+  bty = "n",
+  lwd = 3
+)
